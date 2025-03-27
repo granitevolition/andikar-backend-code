@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const config = require('./config');
-const connectDB = require('./db');
+const { connectDB } = require('./db');
 const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
 
@@ -10,8 +10,18 @@ const apiRoutes = require('./routes/api');
 const app = express();
 const PORT = config.PORT;
 
+// Set trust proxy setting if needed (important for rate limiting behind a proxy)
+if (config.TRUST_PROXY) {
+  app.set('trust proxy', 1);
+  console.log('Trust proxy enabled');
+}
+
 // Connect to database
-connectDB();
+connectDB().catch(err => {
+  console.error('Failed to connect to database on startup');
+  console.error(err);
+  // Continue running the API without the database for basic functionality
+});
 
 // Middleware
 app.use(cors());
