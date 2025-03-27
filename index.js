@@ -3,12 +3,13 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const config = require('./config');
 const { connectDB } = require('./db');
+const User = require('./models/User');
 const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
 
 // Initialize Express app
 const app = express();
-const PORT = config.PORT;
+const PORT = config.PORT || process.env.PORT || 8080;
 
 // Set trust proxy setting if needed (important for rate limiting behind a proxy)
 if (config.TRUST_PROXY) {
@@ -17,11 +18,22 @@ if (config.TRUST_PROXY) {
 }
 
 // Connect to database
-connectDB().catch(err => {
-  console.error('Failed to connect to database on startup');
-  console.error(err);
-  // Continue running the API without the database for basic functionality
-});
+(async () => {
+  try {
+    await connectDB();
+    
+    // Create default user after successful database connection
+    try {
+      await User.createDefaultUser();
+    } catch (err) {
+      console.error('Error creating default user:', err.message);
+      // Continue anyway - this is not critical
+    }
+  } catch (err) {
+    console.error('Database initialization error:', err.message);
+    // Continue running the API without the database for basic functionality
+  }
+})();
 
 // Middleware
 app.use(cors());
@@ -36,7 +48,9 @@ const limiter = rateLimit({
   message: {
     success: false,
     message: 'Too many requests, please try again later'
-  }
+  },
+  // Skip rate limiting in development
+  skip: () => process.env.NODE_ENV === 'development'
 });
 app.use(limiter);
 
@@ -46,8 +60,69 @@ app.get('/', (req, res) => {
     message: 'Andikar API',
     version: '1.0.0',
     status: 'running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
   });
+});
+
+// Echo endpoint - no auth required
+app.post('/echo_text', (req, res) => {
+  try {
+    const { input_text } = req.body;
+    
+    if (!input_text) {
+      return res.status(400).json({
+        success: false,
+        message: 'No input text provided'
+      });
+    }
+    
+    res.json({
+      success: true,
+      result: input_text
+    });
+  } catch (error) {
+    console.error('Echo error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'An error occurred',
+      error: error.message
+    });
+  }
+});
+
+// Simple humanize endpoint - no auth for testing
+app.post('/humanize_text', (req, res) => {
+  try {
+    const { input_text } = req.body;
+    
+    if (!input_text) {
+      return res.status(400).json({
+        success: false,
+        message: 'No input text provided'
+      });
+    }
+    
+    // Simple humanization for testing without DB
+    const humanized = input_text
+      .replace(/utilize/g, 'use')
+      .replace(/commence/g, 'start')
+      .replace(/subsequently/g, 'later')
+      .replace(/therefore/g, 'so')
+      .replace(/furthermore/g, 'also');
+      
+    res.json({
+      success: true,
+      result: humanized
+    });
+  } catch (error) {
+    console.error('Humanize error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'An error occurred',
+      error: error.message
+    });
+  }
 });
 
 // Register routes
@@ -56,7 +131,7 @@ app.use('/', apiRoutes);
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Unhandled error:', err.stack);
   res.status(500).json({
     success: false,
     message: 'An unexpected error occurred',
@@ -89,4 +164,10 @@ process.on('unhandledRejection', (err) => {
   console.error('Unhandled Promise Rejection:', err);
   // In production, you might want to exit the process and let your process manager restart it
   // process.exit(1);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  // Continue running - let the process manager handle restarts if needed
 });
