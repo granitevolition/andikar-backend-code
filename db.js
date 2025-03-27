@@ -1,54 +1,71 @@
 const { Pool } = require('pg');
 
-// Get connection details directly from Railway environment variables when available
-// Railway automatically sets DATABASE_URL, PGHOST, PGUSER, etc.
-const poolConfig = {
-  // Use DATABASE_URL if available (highest priority)
-  ...(process.env.DATABASE_URL && { connectionString: process.env.DATABASE_URL }),
+// Debug: Print all environment variables to see what Railway is providing
+console.log('============= DATABASE DEBUG INFO =============');
+console.log('Available environment variables for database connection:');
+console.log('DATABASE_URL:', process.env.DATABASE_URL ? '[SET]' : '[NOT SET]');
+console.log('DATABASE_PUBLIC_URL:', process.env.DATABASE_PUBLIC_URL ? '[SET]' : '[NOT SET]');
+console.log('PGHOST:', process.env.PGHOST || '[NOT SET]');
+console.log('PGUSER:', process.env.PGUSER || '[NOT SET]');
+console.log('PGDATABASE:', process.env.PGDATABASE || '[NOT SET]');
+console.log('PGPORT:', process.env.PGPORT || '[NOT SET]');
+console.log('PGPASSWORD:', process.env.PGPASSWORD ? '[SET]' : '[NOT SET]');
+console.log('NODE_ENV:', process.env.NODE_ENV || 'development');
+console.log('============= END DEBUG INFO =============');
+
+// Direct simplified approach - no fancy conditionals
+let connectionConfig;
+
+// OPTION 1: Use Railway's DATABASE_URL directly
+if (process.env.DATABASE_URL) {
+  console.log('Using DATABASE_URL for PostgreSQL connection');
+  connectionConfig = {
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  };
+}
+// OPTION 2: Use individual Railway PG environment variables
+else if (process.env.PGHOST && process.env.PGUSER && process.env.PGDATABASE) {
+  console.log('Using individual PostgreSQL environment variables');
+  connectionConfig = {
+    host: process.env.PGHOST,
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    database: process.env.PGDATABASE,
+    port: parseInt(process.env.PGPORT || '5432'),
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  };
+}
+// OPTION 3: HARDCODED FALLBACK for Railway (last resort)
+else {
+  console.log('WARNING: No PostgreSQL environment variables found - using Railway fallback');
   
-  // If individual Postgres env vars are set by Railway, use those
-  ...(process.env.PGHOST && { host: process.env.PGHOST }),
-  ...(process.env.PGUSER && { user: process.env.PGUSER }),
-  ...(process.env.PGPASSWORD && { password: process.env.PGPASSWORD }),
-  ...(process.env.PGDATABASE && { database: process.env.PGDATABASE }),
-  ...(process.env.PGPORT && { port: parseInt(process.env.PGPORT) }),
-  
-  // SSL config for production
-  ...(process.env.NODE_ENV === 'production' && { 
+  // Look for DATABASE variables in the output we logged above
+  // Copy the value from DATABASE_URL in your Railway logs
+  // ⚠️ This is just a fallback, Railway should be setting these environment variables
+  connectionConfig = {
+    connectionString: 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@postgres.railway.internal:5432/railway',
     ssl: { rejectUnauthorized: false }
-  })
-};
+  };
+}
 
-// For debugging connection issues
-console.log('PostgreSQL connection config (sanitized):');
+// Log the final configuration (without sensitive data)
+console.log('Using database connection config (sanitized):');
 console.log({
-  host: poolConfig.host || '(from connectionString)',
-  user: poolConfig.user || '(from connectionString)',
-  database: poolConfig.database || '(from connectionString)',
-  port: poolConfig.port || '(from connectionString)',
-  ssl: poolConfig.ssl || false,
-  connectionString: poolConfig.connectionString ? '(set)' : '(not set)'
+  connectionString: connectionConfig.connectionString ? '(provided)' : '(not provided)',
+  host: connectionConfig.host || '(from connectionString)',
+  database: connectionConfig.database || '(from connectionString)',
+  port: connectionConfig.port || '(from connectionString)',
+  ssl: !!connectionConfig.ssl
 });
 
-// Create connection pool
-const pool = new Pool(poolConfig);
+// Create a connection pool with our configuration
+const pool = new Pool(connectionConfig);
 
-// Log pool events
-pool.on('connect', client => {
-  console.log('New client connected to PostgreSQL');
-});
-
-pool.on('error', (err, client) => {
-  console.error('Unexpected error on idle PostgreSQL client:', err);
-});
-
-// Query helper with error handling
+// Query wrapper with error handling
 const query = async (text, params) => {
-  const start = Date.now();
   try {
     const result = await pool.query(text, params);
-    const duration = Date.now() - start;
-    console.log(`Executed query in ${duration}ms: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`);
     return result;
   } catch (error) {
     console.error('Database query error:');
@@ -63,6 +80,7 @@ const query = async (text, params) => {
 const connectDB = async () => {
   let client;
   try {
+    console.log('Attempting to connect to PostgreSQL database...');
     client = await pool.connect();
     console.log('PostgreSQL database connected successfully!');
     
@@ -81,7 +99,6 @@ const connectDB = async () => {
   } finally {
     if (client) {
       client.release();
-      console.log('Database client released');
     }
   }
 };
