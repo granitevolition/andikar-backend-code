@@ -1,90 +1,81 @@
 const { Pool } = require('pg');
 
-// Debug: Print all environment variables to see what Railway is providing
-console.log('============= DATABASE DEBUG INFO =============');
-console.log('Available environment variables for database connection:');
+// Debug: Print environment variables and Railway info
+console.log('============= RAILWAY ENVIRONMENT DEBUG =============');
+console.log('Project ID:', process.env.RAILWAY_PROJECT_ID || '[NOT SET]');
+console.log('Service:', process.env.RAILWAY_SERVICE || '[NOT SET]');
+console.log('Environment:', process.env.RAILWAY_ENVIRONMENT || '[NOT SET]');
+console.log('Static URL:', process.env.RAILWAY_STATIC_URL || '[NOT SET]');
+console.log('============= DATABASE VARIABLES =============');
 console.log('DATABASE_URL:', process.env.DATABASE_URL ? '[SET]' : '[NOT SET]');
+console.log('DATABASE_PRIVATE_URL:', process.env.DATABASE_PRIVATE_URL ? '[SET]' : '[NOT SET]');
 console.log('DATABASE_PUBLIC_URL:', process.env.DATABASE_PUBLIC_URL ? '[SET]' : '[NOT SET]');
 console.log('PGHOST:', process.env.PGHOST || '[NOT SET]');
 console.log('PGUSER:', process.env.PGUSER || '[NOT SET]');
 console.log('PGDATABASE:', process.env.PGDATABASE || '[NOT SET]');
 console.log('PGPORT:', process.env.PGPORT || '[NOT SET]');
-console.log('PGPASSWORD:', process.env.PGPASSWORD ? '[SET]' : '[NOT SET]');
 console.log('NODE_ENV:', process.env.NODE_ENV || 'development');
 console.log('============= END DEBUG INFO =============');
 
-// SIMPLIFIED DATABASE CONNECTION WITH HARDCODED FALLBACKS
-
-let connectionConfig;
-
-// OPTION 1: Try DATABASE_PUBLIC_URL first (most likely to work)
-if (process.env.DATABASE_PUBLIC_URL) {
-  console.log('Using DATABASE_PUBLIC_URL for PostgreSQL connection');
-  connectionConfig = {
-    connectionString: process.env.DATABASE_PUBLIC_URL,
-    ssl: { rejectUnauthorized: false }
-  };
-}
-// OPTION 2: Try DATABASE_URL
-else if (process.env.DATABASE_URL) {
-  console.log('Using DATABASE_URL for PostgreSQL connection');
-  connectionConfig = {
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
-  };
-}
-// OPTION 3: HARDCODED FALLBACK from your screenshots - use the PUBLIC URL
-else {
-  console.log('WARNING: No PostgreSQL environment variables found - using hardcoded public URL');
+// If DATABASE_URL is not set, manually add it to process.env
+// This is a workaround for Railway's PostgreSQL connection
+if (!process.env.DATABASE_URL) {
+  console.log('Setting DATABASE_URL explicitly for Railway PostgreSQL');
+  // Important: This URL must be correctly set for your Railway PostgreSQL instance!
+  // Replace it with your actual connection info from Railway dashboard
+  process.env.DATABASE_URL = 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@postgres.railway.internal:5432/railway';
   
-  // This URL is taken from your screenshot - the DATABASE_PUBLIC_URL value
-  connectionConfig = {
-    connectionString: 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@containers-us-west-191.railway.app:5432/railway',
-    ssl: { rejectUnauthorized: false }
-  };
+  // Also add a backup using the public URL
+  process.env.DATABASE_PUBLIC_URL = 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@containers-us-west-191.railway.app:5432/railway';
 }
 
-// Log the sanitized connection config
-console.log('Using database connection config (sanitized):');
-console.log({
-  connectionString: '(provided - first part: ' + 
-    connectionConfig.connectionString.substring(0, connectionConfig.connectionString.indexOf('://') + 3) + 
-    '*****@*****)',
-  ssl: !!connectionConfig.ssl
-});
-
-// Create a placeholder pool object that logs errors for non-critical paths
-const mockPool = {
-  query: async () => {
-    console.log('MOCK DB: Operation attempted while database is unavailable');
-    throw new Error('Database not available');
-  },
-  connect: async () => {
-    console.log('MOCK DB: Connection attempted while database is unavailable');
-    throw new Error('Database not available');
-  }
+// Configure PostgreSQL connection - try both internal and public URLs
+const primaryConfig = {
+  connectionString: process.env.DATABASE_URL,
+  ssl: false, // Internal URLs don't need SSL
 };
 
-// Create a real pool with our configuration
+const backupConfig = {
+  connectionString: process.env.DATABASE_PUBLIC_URL,
+  ssl: { rejectUnauthorized: false },
+};
+
+// Create connection pool with primary configuration
 let pool;
 try {
-  pool = new Pool(connectionConfig);
+  console.log('Creating PostgreSQL connection pool with primary configuration (private URL)');
+  pool = new Pool(primaryConfig);
   
-  // Attach error handler
-  pool.on('error', (err, client) => {
-    console.error('Unexpected PostgreSQL pool error:', err.message);
-  });
-  
-  console.log('PostgreSQL pool created successfully');
+  // Test the connection immediately with a simple query
+  pool.query('SELECT 1')
+    .then(() => console.log('Primary database connection successful'))
+    .catch(err => {
+      console.error('Primary connection failed, trying backup connection:', err.message);
+      
+      // Try backup connection if primary fails
+      pool = new Pool(backupConfig);
+      
+      pool.query('SELECT 1')
+        .then(() => console.log('Backup database connection successful'))
+        .catch(backupErr => {
+          console.error('Both primary and backup database connections failed:', backupErr.message);
+        });
+    });
 } catch (error) {
-  console.error('Failed to create PostgreSQL pool:', error.message);
-  pool = mockPool; // Use mock pool if real one fails
+  console.error('Error creating PostgreSQL pool:', error.message);
+  throw error; // Rethrow to stop application if database is critical
 }
 
-// Query wrapper with error handling
+// Query helper with error handling
 const query = async (text, params) => {
+  const start = Date.now();
   try {
     const result = await pool.query(text, params);
+    const duration = Date.now() - start;
+    if (duration > 200) {
+      // Log slow queries
+      console.log(`Slow query (${duration}ms): ${text.slice(0, 100)}...`);
+    }
     return result;
   } catch (error) {
     console.error('Database query error:');
@@ -95,7 +86,7 @@ const query = async (text, params) => {
   }
 };
 
-// Test the database connection
+// Initialize database
 const connectDB = async () => {
   let client;
   try {
@@ -113,7 +104,7 @@ const connectDB = async () => {
     return pool;
   } catch (error) {
     console.error(`Error connecting to PostgreSQL database: ${error.message}`);
-    return mockPool; // Return mock pool if connection fails
+    throw error; // Rethrow to indicate database connection is required
   } finally {
     if (client) {
       client.release();
@@ -124,6 +115,9 @@ const connectDB = async () => {
 // Initialize database structure
 const initDatabase = async (client) => {
   try {
+    // Enable more detailed PostgreSQL logs for debugging
+    await client.query("SET log_statement = 'all'");
+    
     // Create users table if it doesn't exist
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -176,7 +170,7 @@ const initDatabase = async (client) => {
     return true;
   } catch (error) {
     console.error(`Error initializing database: ${error.message}`);
-    return false;
+    throw error; // Rethrow to indicate database initialization is required
   }
 };
 
