@@ -21,55 +21,85 @@ console.log('============= END DEBUG INFO =============');
 // This is a workaround for Railway's PostgreSQL connection
 if (!process.env.DATABASE_URL) {
   console.log('Setting DATABASE_URL explicitly for Railway PostgreSQL');
-  // Important: This URL must be correctly set for your Railway PostgreSQL instance!
-  // Replace it with your actual connection info from Railway dashboard
-  process.env.DATABASE_URL = 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@postgres.railway.internal:5432/railway';
   
-  // Also add a backup using the public URL
-  process.env.DATABASE_PUBLIC_URL = 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@containers-us-west-191.railway.app:5432/railway';
+  // THESE VALUES COME DIRECTLY FROM YOUR RAILWAY DASHBOARD SCREENSHOTS
+  // Using the exact values shown in your screenshots
+  process.env.DATABASE_URL = 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@postgres.railway.internal:5432/railway';
+  process.env.DATABASE_PUBLIC_URL = 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@ballast-postgres-production.railway.internal:5432/railway';
 }
 
-// Configure PostgreSQL connection - try both internal and public URLs
-const primaryConfig = {
-  connectionString: process.env.DATABASE_URL,
-  ssl: false, // Internal URLs don't need SSL
-};
-
-const backupConfig = {
-  connectionString: process.env.DATABASE_PUBLIC_URL,
-  ssl: { rejectUnauthorized: false },
-};
-
-// Create connection pool with primary configuration
+// Try multiple connection approaches
 let pool;
-try {
-  console.log('Creating PostgreSQL connection pool with primary configuration (private URL)');
-  pool = new Pool(primaryConfig);
-  
-  // Test the connection immediately with a simple query
-  pool.query('SELECT 1')
-    .then(() => console.log('Primary database connection successful'))
-    .catch(err => {
-      console.error('Primary connection failed, trying backup connection:', err.message);
-      
-      // Try backup connection if primary fails
-      pool = new Pool(backupConfig);
-      
-      pool.query('SELECT 1')
-        .then(() => console.log('Backup database connection successful'))
-        .catch(backupErr => {
-          console.error('Both primary and backup database connections failed:', backupErr.message);
-        });
+
+// Create a function to attempt connection
+async function attemptConnection(connectionString, description) {
+  try {
+    console.log(`Attempting to connect using ${description}...`);
+    const testPool = new Pool({ 
+      connectionString, 
+      ssl: connectionString.includes('.railway.app') ? { rejectUnauthorized: false } : false 
     });
-} catch (error) {
-  console.error('Error creating PostgreSQL pool:', error.message);
-  throw error; // Rethrow to stop application if database is critical
+    
+    // Test the connection
+    const result = await testPool.query('SELECT 1 as test');
+    console.log(`Successfully connected using ${description}!`);
+    return testPool;
+  } catch (error) {
+    console.log(`Connection failed using ${description}: ${error.message}`);
+    return null;
+  }
+}
+
+// Try all possible connection strings
+async function connectToDatabase() {
+  // Connection attempts in order of preference
+  const connectionAttempts = [
+    // 1. Try the DATABASE_URL from Railway (if set)
+    { 
+      string: process.env.DATABASE_URL, 
+      description: 'Railway DATABASE_URL' 
+    },
+    // 2. Try the DATABASE_PUBLIC_URL from Railway (if set)
+    { 
+      string: process.env.DATABASE_PUBLIC_URL, 
+      description: 'Railway DATABASE_PUBLIC_URL' 
+    },
+    // 3. Try explicit connection to the hostnames we've seen in your screenshots
+    {
+      string: 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@postgres.railway.internal:5432/railway',
+      description: 'Hardcoded internal connection string'
+    },
+    {
+      string: 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@ballast-postgres-production.railway.internal:5432/railway',
+      description: 'Hardcoded public connection string'
+    },
+    // 4. Try to replace "internal" with "app" in the hostnames as a last resort
+    {
+      string: 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@containers-us-west-191.railway.app:5432/railway',
+      description: 'External hostname'
+    }
+  ];
+
+  // Try each connection string in order
+  for (const attempt of connectionAttempts) {
+    if (!attempt.string) continue;
+    
+    const result = await attemptConnection(attempt.string, attempt.description);
+    if (result) {
+      return result;
+    }
+  }
+  
+  throw new Error('All database connection attempts failed');
 }
 
 // Query helper with error handling
 const query = async (text, params) => {
   const start = Date.now();
   try {
+    if (!pool) {
+      throw new Error('Database pool not initialized');
+    }
     const result = await pool.query(text, params);
     const duration = Date.now() - start;
     if (duration > 200) {
@@ -90,7 +120,12 @@ const query = async (text, params) => {
 const connectDB = async () => {
   let client;
   try {
-    console.log('Attempting to connect to PostgreSQL database...');
+    console.log('Connecting to PostgreSQL database...');
+    
+    // Try all connection methods
+    pool = await connectToDatabase();
+    
+    // Get a client from the pool
     client = await pool.connect();
     console.log('PostgreSQL database connected successfully!');
     
@@ -98,7 +133,7 @@ const connectDB = async () => {
     const result = await client.query('SELECT NOW() as current_time');
     console.log('Database time:', result.rows[0].current_time);
     
-    // Check if tables exist, create them if not
+    // Initialize database tables
     await initDatabase(client);
     
     return pool;
@@ -115,9 +150,6 @@ const connectDB = async () => {
 // Initialize database structure
 const initDatabase = async (client) => {
   try {
-    // Enable more detailed PostgreSQL logs for debugging
-    await client.query("SET log_statement = 'all'");
-    
     // Create users table if it doesn't exist
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
