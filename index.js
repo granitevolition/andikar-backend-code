@@ -9,28 +9,33 @@ const apiRoutes = require('./routes/api');
 
 // Initialize Express app
 const app = express();
-const PORT = config.PORT || process.env.PORT || 8080;
+const PORT = process.env.PORT || config.PORT || 8080;
 
 // Set trust proxy setting if needed (important for rate limiting behind a proxy)
 if (config.TRUST_PROXY) {
   app.set('trust proxy', 1);
-  console.log('Trust proxy enabled');
+  console.log('Trust proxy enabled for rate limiting');
 }
+
+// Display environment info for debugging
+console.log(`Starting Andikar API in ${process.env.NODE_ENV || 'development'} mode`);
+console.log(`Using PORT: ${PORT}`);
 
 // Connect to database
 (async () => {
   try {
+    console.log('Connecting to PostgreSQL database...');
     await connectDB();
     
     // Create default user after successful database connection
     try {
       await User.createDefaultUser();
     } catch (err) {
-      console.error('Error creating default user:', err.message);
+      console.warn('Warning: Could not create default user:', err.message);
       // Continue anyway - this is not critical
     }
   } catch (err) {
-    console.error('Database initialization error:', err.message);
+    console.warn('Database initialization warning:', err.message);
     // Continue running the API without the database for basic functionality
   }
 })();
@@ -61,7 +66,8 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     status: 'running',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    railway: process.env.RAILWAY_PROJECT_NAME ? true : false
   });
 });
 
