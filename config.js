@@ -5,8 +5,9 @@ module.exports = {
   PORT: process.env.PORT || 3000,
   JWT_SECRET: process.env.JWT_SECRET || 'andikar-api-secret-key',
   
-  // Database configuration - using MongoDB connection string
-  MONGODB_URI: process.env.MONGODB_URI || 'mongodb://localhost:27017/andikar',
+  // Database configuration (PostgreSQL)
+  DATABASE_URL: process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/andikar',
+  DATABASE_SSL: process.env.NODE_ENV === 'production',
   
   // Admin API URL
   ADMIN_API_URL: process.env.ADMIN_API_URL || 'http://localhost:3001',
@@ -41,5 +42,8 @@ module.exports = {
       "word_limit": 8000,
       "description": "Premium plan with 8,000 words per round"
     }
-  }
+  },
+  
+  // Trust proxy (for rate limit behind reverse proxy)
+  TRUST_PROXY: process.env.TRUST_PROXY === 'true' || process.env.NODE_ENV === 'production'
 };
