@@ -13,54 +13,73 @@ console.log('PGPASSWORD:', process.env.PGPASSWORD ? '[SET]' : '[NOT SET]');
 console.log('NODE_ENV:', process.env.NODE_ENV || 'development');
 console.log('============= END DEBUG INFO =============');
 
-// Direct simplified approach - no fancy conditionals
+// SIMPLIFIED DATABASE CONNECTION WITH HARDCODED FALLBACKS
+
 let connectionConfig;
 
-// OPTION 1: Use Railway's DATABASE_URL directly
-if (process.env.DATABASE_URL) {
+// OPTION 1: Try DATABASE_PUBLIC_URL first (most likely to work)
+if (process.env.DATABASE_PUBLIC_URL) {
+  console.log('Using DATABASE_PUBLIC_URL for PostgreSQL connection');
+  connectionConfig = {
+    connectionString: process.env.DATABASE_PUBLIC_URL,
+    ssl: { rejectUnauthorized: false }
+  };
+}
+// OPTION 2: Try DATABASE_URL
+else if (process.env.DATABASE_URL) {
   console.log('Using DATABASE_URL for PostgreSQL connection');
   connectionConfig = {
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    ssl: { rejectUnauthorized: false }
   };
 }
-// OPTION 2: Use individual Railway PG environment variables
-else if (process.env.PGHOST && process.env.PGUSER && process.env.PGDATABASE) {
-  console.log('Using individual PostgreSQL environment variables');
-  connectionConfig = {
-    host: process.env.PGHOST,
-    user: process.env.PGUSER,
-    password: process.env.PGPASSWORD,
-    database: process.env.PGDATABASE,
-    port: parseInt(process.env.PGPORT || '5432'),
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-  };
-}
-// OPTION 3: HARDCODED FALLBACK for Railway (last resort)
+// OPTION 3: HARDCODED FALLBACK from your screenshots - use the PUBLIC URL
 else {
-  console.log('WARNING: No PostgreSQL environment variables found - using Railway fallback');
+  console.log('WARNING: No PostgreSQL environment variables found - using hardcoded public URL');
   
-  // Look for DATABASE variables in the output we logged above
-  // Copy the value from DATABASE_URL in your Railway logs
-  // ⚠️ This is just a fallback, Railway should be setting these environment variables
+  // This URL is taken from your screenshot - the DATABASE_PUBLIC_URL value
   connectionConfig = {
-    connectionString: 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@postgres.railway.internal:5432/railway',
+    connectionString: 'postgresql://postgres:zTJggTeesP3YVM8RWuGvVnUiihMwCwy1@containers-us-west-191.railway.app:5432/railway',
     ssl: { rejectUnauthorized: false }
   };
 }
 
-// Log the final configuration (without sensitive data)
+// Log the sanitized connection config
 console.log('Using database connection config (sanitized):');
 console.log({
-  connectionString: connectionConfig.connectionString ? '(provided)' : '(not provided)',
-  host: connectionConfig.host || '(from connectionString)',
-  database: connectionConfig.database || '(from connectionString)',
-  port: connectionConfig.port || '(from connectionString)',
+  connectionString: '(provided - first part: ' + 
+    connectionConfig.connectionString.substring(0, connectionConfig.connectionString.indexOf('://') + 3) + 
+    '*****@*****)',
   ssl: !!connectionConfig.ssl
 });
 
-// Create a connection pool with our configuration
-const pool = new Pool(connectionConfig);
+// Create a placeholder pool object that logs errors for non-critical paths
+const mockPool = {
+  query: async () => {
+    console.log('MOCK DB: Operation attempted while database is unavailable');
+    throw new Error('Database not available');
+  },
+  connect: async () => {
+    console.log('MOCK DB: Connection attempted while database is unavailable');
+    throw new Error('Database not available');
+  }
+};
+
+// Create a real pool with our configuration
+let pool;
+try {
+  pool = new Pool(connectionConfig);
+  
+  // Attach error handler
+  pool.on('error', (err, client) => {
+    console.error('Unexpected PostgreSQL pool error:', err.message);
+  });
+  
+  console.log('PostgreSQL pool created successfully');
+} catch (error) {
+  console.error('Failed to create PostgreSQL pool:', error.message);
+  pool = mockPool; // Use mock pool if real one fails
+}
 
 // Query wrapper with error handling
 const query = async (text, params) => {
@@ -94,8 +113,7 @@ const connectDB = async () => {
     return pool;
   } catch (error) {
     console.error(`Error connecting to PostgreSQL database: ${error.message}`);
-    // Don't terminate the process, allow the application to run without database temporarily
-    return pool;
+    return mockPool; // Return mock pool if connection fails
   } finally {
     if (client) {
       client.release();
@@ -155,10 +173,10 @@ const initDatabase = async (client) => {
     `);
 
     console.log('Database tables initialized or already exist');
+    return true;
   } catch (error) {
     console.error(`Error initializing database: ${error.message}`);
-    // Don't throw the error, allow the app to continue
-    console.log('Continuing without database initialization');
+    return false;
   }
 };
 
