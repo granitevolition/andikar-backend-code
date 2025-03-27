@@ -1,49 +1,74 @@
 const { Pool } = require('pg');
-const config = require('./config');
 
-// Configure database connection
-let poolConfig = {};
-
-if (config.DATABASE_URL) {
-  // Use connection string if provided (Railway sets this automatically)
-  poolConfig.connectionString = config.DATABASE_URL;
+// Get connection details directly from Railway environment variables when available
+// Railway automatically sets DATABASE_URL, PGHOST, PGUSER, etc.
+const poolConfig = {
+  // Use DATABASE_URL if available (highest priority)
+  ...(process.env.DATABASE_URL && { connectionString: process.env.DATABASE_URL }),
   
-  // Configure SSL (required for Railway PostgreSQL)
-  if (process.env.NODE_ENV === 'production') {
-    poolConfig.ssl = {
-      rejectUnauthorized: false // Required for Railway and other cloud PostgreSQL providers
-    };
-  }
-} else {
-  // Fallback to individual connection parameters
-  poolConfig = {
-    user: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'postgres',
-    host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT || '5432'),
-    database: process.env.DB_NAME || 'andikar'
-  };
-}
+  // If individual Postgres env vars are set by Railway, use those
+  ...(process.env.PGHOST && { host: process.env.PGHOST }),
+  ...(process.env.PGUSER && { user: process.env.PGUSER }),
+  ...(process.env.PGPASSWORD && { password: process.env.PGPASSWORD }),
+  ...(process.env.PGDATABASE && { database: process.env.PGDATABASE }),
+  ...(process.env.PGPORT && { port: parseInt(process.env.PGPORT) }),
+  
+  // SSL config for production
+  ...(process.env.NODE_ENV === 'production' && { 
+    ssl: { rejectUnauthorized: false }
+  })
+};
 
-// Additional pool configuration
-poolConfig.max = parseInt(process.env.DB_POOL_SIZE || '10'); // Connection pool size
-poolConfig.idleTimeoutMillis = 30000; // How long a client is allowed to remain idle before being closed
-poolConfig.connectionTimeoutMillis = 10000; // Connection timeout
+// For debugging connection issues
+console.log('PostgreSQL connection config (sanitized):');
+console.log({
+  host: poolConfig.host || '(from connectionString)',
+  user: poolConfig.user || '(from connectionString)',
+  database: poolConfig.database || '(from connectionString)',
+  port: poolConfig.port || '(from connectionString)',
+  ssl: poolConfig.ssl || false,
+  connectionString: poolConfig.connectionString ? '(set)' : '(not set)'
+});
 
-// Create a connection pool
+// Create connection pool
 const pool = new Pool(poolConfig);
 
-// Register error handler on the pool
-pool.on('error', (err, client) => {
-  console.error('Unexpected error on idle client', err);
+// Log pool events
+pool.on('connect', client => {
+  console.log('New client connected to PostgreSQL');
 });
+
+pool.on('error', (err, client) => {
+  console.error('Unexpected error on idle PostgreSQL client:', err);
+});
+
+// Query helper with error handling
+const query = async (text, params) => {
+  const start = Date.now();
+  try {
+    const result = await pool.query(text, params);
+    const duration = Date.now() - start;
+    console.log(`Executed query in ${duration}ms: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`);
+    return result;
+  } catch (error) {
+    console.error('Database query error:');
+    console.error('Query:', text);
+    console.error('Parameters:', params);
+    console.error('Error details:', error.message);
+    throw error;
+  }
+};
 
 // Test the database connection
 const connectDB = async () => {
   let client;
   try {
     client = await pool.connect();
-    console.log('PostgreSQL database connected successfully');
+    console.log('PostgreSQL database connected successfully!');
+    
+    // Basic connectivity test
+    const result = await client.query('SELECT NOW() as current_time');
+    console.log('Database time:', result.rows[0].current_time);
     
     // Check if tables exist, create them if not
     await initDatabase(client);
@@ -52,10 +77,12 @@ const connectDB = async () => {
   } catch (error) {
     console.error(`Error connecting to PostgreSQL database: ${error.message}`);
     // Don't terminate the process, allow the application to run without database temporarily
-    // This helps with debugging and allows the basic API endpoints to still work
-    return pool; // Return pool anyway to prevent errors elsewhere
+    return pool;
   } finally {
-    if (client) client.release();
+    if (client) {
+      client.release();
+      console.log('Database client released');
+    }
   }
 };
 
@@ -115,19 +142,6 @@ const initDatabase = async (client) => {
     console.error(`Error initializing database: ${error.message}`);
     // Don't throw the error, allow the app to continue
     console.log('Continuing without database initialization');
-  }
-};
-
-// Query wrapper with error handling
-const query = async (text, params) => {
-  try {
-    const result = await pool.query(text, params);
-    return result;
-  } catch (error) {
-    console.error('Database query error:', error.message);
-    console.error('Query:', text);
-    console.error('Parameters:', params);
-    throw error;
   }
 };
 
