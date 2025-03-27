@@ -21,30 +21,11 @@ if (config.TRUST_PROXY) {
 console.log(`Starting Andikar API in ${process.env.NODE_ENV || 'development'} mode`);
 console.log(`Using PORT: ${PORT}`);
 
-// Connect to database
-(async () => {
-  try {
-    console.log('Connecting to PostgreSQL database...');
-    await connectDB();
-    
-    // Create default user after successful database connection
-    try {
-      await User.createDefaultUser();
-    } catch (err) {
-      console.warn('Warning: Could not create default user:', err.message);
-      // Continue anyway - this is not critical
-    }
-  } catch (err) {
-    console.warn('Database initialization warning:', err.message);
-    // Continue running the API without the database for basic functionality
-  }
-})();
-
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Apply rate limiting
+// Apply rate limiting with skip option to avoid errors in development
 const limiter = rateLimit({
   windowMs: config.RATE_LIMIT.windowMs,
   max: config.RATE_LIMIT.max,
@@ -54,10 +35,11 @@ const limiter = rateLimit({
     success: false,
     message: 'Too many requests, please try again later'
   },
-  // Skip rate limiting in development
-  skip: () => process.env.NODE_ENV === 'development'
+  skip: () => process.env.NODE_ENV !== 'production' // Skip in non-production environments
 });
-app.use(limiter);
+
+// Apply rate limiting to API routes only
+app.use('/api', limiter);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -131,6 +113,26 @@ app.post('/humanize_text', (req, res) => {
   }
 });
 
+// Connect to database (after setting up basic endpoints)
+// This ensures the API works even without a database
+(async () => {
+  try {
+    console.log('Connecting to PostgreSQL database...');
+    await connectDB();
+    
+    // Create default user after successful database connection
+    try {
+      await User.createDefaultUser();
+    } catch (err) {
+      console.warn('Warning: Could not create default user:', err.message);
+      // Continue anyway - this is not critical
+    }
+  } catch (err) {
+    console.warn('Database initialization warning:', err.message);
+    // Continue running the API without the database for basic functionality
+  }
+})();
+
 // Register routes
 app.use('/api/auth', authRoutes);
 app.use('/', apiRoutes);
@@ -168,8 +170,7 @@ app.listen(PORT, () => {
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Promise Rejection:', err);
-  // In production, you might want to exit the process and let your process manager restart it
-  // process.exit(1);
+  // Continue running - let the process manager handle restarts if needed
 });
 
 // Handle uncaught exceptions
