@@ -5,9 +5,8 @@ module.exports = {
   PORT: process.env.PORT || 3000,
   JWT_SECRET: process.env.JWT_SECRET || 'andikar-api-secret-key',
   
-  // Database configuration (PostgreSQL)
-  DATABASE_URL: process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/andikar',
-  DATABASE_SSL: process.env.NODE_ENV === 'production',
+  // Note: Database configuration now comes directly from environment variables
+  // The db.js file handles this directly for better Railway compatibility
   
   // Admin API URL
   ADMIN_API_URL: process.env.ADMIN_API_URL || 'http://localhost:3001',
