@@ -41,7 +41,7 @@ const limiter = rateLimit({
 // Apply rate limiting to API routes only
 app.use('/api', limiter);
 
-// Root endpoint
+// Root endpoint - simple health check
 app.get('/', (req, res) => {
   res.json({
     message: 'Andikar API',
@@ -53,7 +53,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Echo endpoint - no auth required
+// Echo endpoint - basic functionality test
 app.post('/echo_text', (req, res) => {
   try {
     const { input_text } = req.body;
@@ -79,102 +79,117 @@ app.post('/echo_text', (req, res) => {
   }
 });
 
-// Simple humanize endpoint - no auth for testing
-app.post('/humanize_text', (req, res) => {
+// Database check endpoint - to verify PostgreSQL connectivity
+app.get('/database-check', async (req, res) => {
   try {
-    const { input_text } = req.body;
+    const { pool } = require('./db');
+    const result = await pool.query('SELECT NOW() as time');
     
-    if (!input_text) {
-      return res.status(400).json({
-        success: false,
-        message: 'No input text provided'
-      });
-    }
-    
-    // Simple humanization for testing without DB
-    const humanized = input_text
-      .replace(/utilize/g, 'use')
-      .replace(/commence/g, 'start')
-      .replace(/subsequently/g, 'later')
-      .replace(/therefore/g, 'so')
-      .replace(/furthermore/g, 'also');
-      
     res.json({
       success: true,
-      result: humanized
+      message: 'Database connection successful',
+      data: {
+        time: result.rows[0].time,
+        connectionInfo: {
+          databaseExists: !!pool,
+          clientActive: !!pool.totalCount,
+          idleClients: pool.idleCount || 0,
+          totalClients: pool.totalCount || 0
+        }
+      }
     });
   } catch (error) {
-    console.error('Humanize error:', error);
+    console.error('Database check error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred',
+      message: 'Database connection failed',
       error: error.message
     });
   }
 });
 
-// Connect to database (after setting up basic endpoints)
-// This ensures the API works even without a database
-(async () => {
+// Initialize the application - connect to database first
+async function initializeApp() {
   try {
     console.log('Connecting to PostgreSQL database...');
     await connectDB();
+    console.log('Database connection established');
     
     // Create default user after successful database connection
     try {
       await User.createDefaultUser();
-    } catch (err) {
-      console.warn('Warning: Could not create default user:', err.message);
-      // Continue anyway - this is not critical
+    } catch (error) {
+      console.error('Failed to create default user:', error.message);
+      // This is not critical, so we can continue
     }
-  } catch (err) {
-    console.warn('Database initialization warning:', err.message);
-    // Continue running the API without the database for basic functionality
+    
+    // Start the server after database connection is established
+    startServer();
+  } catch (error) {
+    console.error('FATAL: Database connection failed:', error.message);
+    console.error('Application cannot start without database connection');
+    process.exit(1); // Exit with error code
   }
-})();
-
-// Register routes
-app.use('/api/auth', authRoutes);
-app.use('/', apiRoutes);
-
-// Error handler
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err.stack);
-  res.status(500).json({
-    success: false,
-    message: 'An unexpected error occurred',
-    error: process.env.NODE_ENV === 'production' ? null : err.message
-  });
-});
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'API endpoint not found'
-  });
-});
+}
 
 // Start the server
-app.listen(PORT, () => {
-  console.log(`Andikar API running on port ${PORT}`);
-  console.log(`http://localhost:${PORT}`);
+function startServer() {
+  // Register routes
+  app.use('/api/auth', authRoutes);
+  app.use('/', apiRoutes);
   
-  // Display available plans
-  console.log('Available plans:');
-  for (const [planName, planDetails] of Object.entries(config.PRICING_PLANS)) {
-    console.log(`  - ${planName}: ${planDetails.word_limit} words per round (KES ${planDetails.price})`);
-  }
-});
+  // Error handler
+  app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err.stack);
+    res.status(500).json({
+      success: false,
+      message: 'An unexpected error occurred',
+      error: process.env.NODE_ENV === 'production' ? null : err.message
+    });
+  });
+  
+  // 404 handler
+  app.use((req, res) => {
+    res.status(404).json({
+      success: false,
+      message: 'API endpoint not found'
+    });
+  });
+  
+  // Start the HTTP server
+  app.listen(PORT, () => {
+    console.log(`Andikar API running on port ${PORT}`);
+    console.log(`http://localhost:${PORT}`);
+    
+    // Display available plans
+    console.log('Available plans:');
+    for (const [planName, planDetails] of Object.entries(config.PRICING_PLANS)) {
+      console.log(`  - ${planName}: ${planDetails.word_limit} words per round (KES ${planDetails.price})`);
+    }
+  });
+}
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Promise Rejection:', err);
-  // Continue running - let the process manager handle restarts if needed
+  // Database errors should be considered fatal in production
+  if (process.env.NODE_ENV === 'production' && 
+      (err.message.includes('database') || err.message.includes('sql') || err.message.includes('postgres'))) {
+    console.error('FATAL: Unhandled database error in production. Terminating application.');
+    process.exit(1);
+  }
 });
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
-  // Continue running - let the process manager handle restarts if needed
+  // Database errors should be considered fatal in production
+  if (process.env.NODE_ENV === 'production' && 
+      (err.message.includes('database') || err.message.includes('sql') || err.message.includes('postgres'))) {
+    console.error('FATAL: Unhandled database error in production. Terminating application.');
+    process.exit(1);
+  }
 });
+
+// Start initialization process
+initializeApp();
